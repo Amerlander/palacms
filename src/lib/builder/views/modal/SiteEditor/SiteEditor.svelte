@@ -6,6 +6,7 @@
 	import Content from '$lib/builder/components/Content.svelte'
 	import * as _ from 'lodash-es'
 	import CodeEditor from '$lib/builder/components/CodeEditor/CodeMirror.svelte'
+	import TextInput from '$lib/builder/ui/TextInput.svelte'
 	import { site_context, hide_dynamic_field_types_context } from '$lib/builder/stores/context'
 	import { Sites, SiteFields, SiteEntries } from '$lib/pocketbase/collections'
 	import { current_user } from '$lib/pocketbase/user'
@@ -25,11 +26,24 @@
 
 	hide_dynamic_field_types_context.set(true)
 
-	const initial_code = { head: site?.head, foot: site?.foot }
+	const initial_code = { head: site?.head, foot: site?.foot, public_url: site?.public_url || '' }
 	const initial_data = _.cloneDeep(site_data)
 
 	let head = $state(site?.head || '')
 	let foot = $state(site?.foot || '')
+	let public_url = $state(site?.public_url || '')
+
+	// Mirrors NormalizePublicURL in internal/published.go, which has the final
+	// say; checked here so a typo shows inline instead of failing the save.
+	const public_url_error = $derived.by(() => {
+		const value = public_url.trim()
+		if (!value) return ''
+		try {
+			const url = new URL(value)
+			if ((url.protocol === 'http:' || url.protocol === 'https:') && !/[?#]/.test(value) && !url.username) return ''
+		} catch {}
+		return 'Enter an absolute http(s) URL without query or fragment, e.g. https://www.example.com'
+	})
 
 	let disableSave = $state(false)
 
@@ -43,7 +57,7 @@
 
 	// Compare current state to initial data
 	$effect(() => {
-		const code_changed = head !== initial_code.head || foot !== initial_code.foot
+		const code_changed = head !== initial_code.head || foot !== initial_code.foot || public_url !== initial_code.public_url
 		const data_changed = !_.isEqual(initial_data, site_data)
 		has_unsaved_changes = code_changed || data_changed
 	})
@@ -70,12 +84,16 @@
 		if (!site) {
 			return
 		}
+		if (public_url_error) return
 
 		disableSave = true
 		try {
 			Sites.update(site.id, {
 				head,
-				foot
+				foot,
+				// Only developers see the field; the server rejects public_url
+				// changes from anyone else, so don't send it unless it changed.
+				...(public_url !== initial_code.public_url ? { public_url: public_url.trim() } : {})
 			})
 
 			await self.commit()
@@ -99,7 +117,7 @@
 		: {
 				label: 'Save',
 				onclick: saveComponent,
-				disabled: disableSave
+				disabled: disableSave || !!public_url_error
 			}}
 />
 
@@ -156,6 +174,14 @@
 					<PaneGroup direction="vertical" autoSaveId="SiteEditor-vertical">
 						<Pane minSize={1.4}>
 							<div class="container" style="margin-bottom: 1rem">
+								<div class="public-url">
+									<TextInput label="Public URL" bind:value={public_url} placeholder="https://www.example.com" disabled={$read_only} />
+									{#if public_url_error}
+										<p class="public-url-error">{public_url_error}</p>
+									{:else}
+										<p class="public-url-help">Where the deployed copy of this site lives. Used in the downloaded files (sitemap, links) instead of the Primo host.</p>
+									{/if}
+								</div>
 								<span class="primo--field-label">Head HTML</span>
 								<CodeEditor mode="html" bind:value={head} disabled={$read_only} on:save={saveComponent} />
 							</div>
@@ -246,5 +272,18 @@
 		display: flex;
 		flex-direction: column;
 		max-height: 100%;
+	}
+	.public-url {
+		margin-bottom: 1rem;
+	}
+	.public-url-help,
+	.public-url-error {
+		margin-top: 0.375rem;
+		font-size: 0.75rem;
+		line-height: 1.4;
+		color: var(--color-gray-4);
+	}
+	.public-url-error {
+		color: #f87171;
 	}
 </style>

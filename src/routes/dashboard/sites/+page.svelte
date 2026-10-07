@@ -24,6 +24,7 @@
 	import { is_host_assigned, is_host_reachable, site_editor_url } from '$lib/site_host'
 	import CreateSite from '$lib/components/CreateSite.svelte'
 	import ConnectDomain from '$lib/components/ConnectDomain.svelte'
+	import { toast } from 'svelte-sonner'
 
 	const sidebar = useSidebar()
 
@@ -138,6 +139,35 @@
 	function download_site_file(site: Site) {
 		download_site_id = site.id
 		download_site_name = site.name
+	}
+
+	// The published output as a static zip (internal/published.go), for
+	// deploying the site to another host.
+	let downloading_published_id: string | null = $state(null)
+	async function download_published_site(site: Site) {
+		downloading_published_id = site.id
+		try {
+			const response = await fetch(`${self.instance?.baseURL}/api/primo/published/${site.id}`, {
+				headers: self.instance?.authStore.token ? { Authorization: `Bearer ${self.instance.authStore.token}` } : {}
+			})
+			if (!response.ok) {
+				const data = await response.json().catch(() => ({}))
+				throw new Error(data.message || `Download failed (${response.status})`)
+			}
+			const filename = /filename="?([^";]+)"?/.exec(response.headers.get('Content-Disposition') ?? '')?.[1] ?? 'site-published.zip'
+			const url = URL.createObjectURL(await response.blob())
+			const a = document.createElement('a')
+			a.href = url
+			a.download = filename
+			document.body.appendChild(a)
+			a.click()
+			document.body.removeChild(a)
+			URL.revokeObjectURL(url)
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : 'Failed to download published site')
+		} finally {
+			downloading_published_id = null
+		}
 	}
 
 	let is_rename_site_open = $state(false)
@@ -328,6 +358,18 @@
 							<span>Download</span>
 						{/if}
 					</DropdownMenu.Item>
+					{#if site.preview}
+						<!-- preview is set by every publish, so it marks sites with published files -->
+						<DropdownMenu.Item onclick={() => download_published_site(site)} disabled={downloading_published_id === site.id}>
+							{#if downloading_published_id === site.id}
+								<Loader class="h-4 w-4 animate-spin" />
+								<span>Downloading...</span>
+							{:else}
+								<Download class="h-4 w-4" />
+								<span>Download published site</span>
+							{/if}
+						</DropdownMenu.Item>
+					{/if}
 					<DropdownMenu.Item
 						onclick={() => {
 							current_site = site
