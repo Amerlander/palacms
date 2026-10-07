@@ -173,12 +173,13 @@ func rewritePublishedHost(host, publicURL string) func([]byte) []byte {
 }
 
 // canConfigureSiteDeploy reports whether auth may change how a site is
-// deployed outside Primo (the dashboard's Publishing settings), such as its
+// deployed outside Primo (the dashboard's Publishing settings): its
 // public_url, which decides where the deployed copy claims to live (sitemap,
-// links). Like head/foot code that's developer configuration, so it's limited
-// to developers. Mirrors the editor's notion of a developer (src/lib/pocketbase/
-// user.ts): the server role wins, and only users without one fall back to
-// their site role assignment.
+// links), and its go-live webhook (deploy.go). Like head/foot code that's
+// developer configuration, so it's limited to developers. Mirrors the
+// editor's notion of a developer (src/lib/pocketbase/user.ts): the server
+// role wins, and only users without one fall back to their site role
+// assignment.
 func canConfigureSiteDeploy(app core.App, auth *core.Record, siteId string) bool {
 	if auth == nil {
 		return false
@@ -228,7 +229,8 @@ func RegisterPublicURLValidation(pb *pocketbase.PocketBase) error {
 // RegisterPublishedEndpoint serves BuildPublishedSiteZip as a download. Access
 // mirrors the export endpoint, but checks the update rule like
 // /api/primo/generate: the zip is the publish output, so it's available to
-// whoever may publish the site.
+// whoever may publish the site, and to a go-live webhook receiver holding a
+// valid download token.
 func RegisterPublishedEndpoint(pb *pocketbase.PocketBase) error {
 	pb.OnServe().BindFunc(func(serveEvent *core.ServeEvent) error {
 		serveEvent.Router.GET("/api/primo/published/{siteId}", func(e *core.RequestEvent) error {
@@ -239,17 +241,24 @@ func RegisterPublishedEndpoint(pb *pocketbase.PocketBase) error {
 
 			// Allow unauthenticated access from localhost (for primo dev)
 			isLocal := IsLocalhost(e)
+			// A go-live webhook receiver has no user session; it downloads
+			// with the token Go live put in its download_url (deploy.go).
+			token := e.Request.URL.Query().Get("token")
 
-			if e.Auth == nil && !isLocal {
+			if token == "" && e.Auth == nil && !isLocal {
 				return e.UnauthorizedError("Authentication required", nil)
 			}
 
 			site, err := pb.FindRecordById("sites", siteId)
-			if err != nil {
+			if token != "" {
+				if err != nil || !ValidDeployDownloadToken(site, token) {
+					return e.UnauthorizedError("Invalid or expired download link", nil)
+				}
+			} else if err != nil {
 				return e.NotFoundError("Site not found", err)
 			}
 
-			if !isLocal {
+			if token == "" && !isLocal {
 				info, err := e.RequestInfo()
 				if err != nil {
 					return e.InternalServerError("Failed to get request info", err)

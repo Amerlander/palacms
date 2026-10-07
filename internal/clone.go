@@ -372,6 +372,7 @@ func importSnapshotRecords(app core.App, snapshot *Snapshot, name, host, groupId
 		newSite.Set("preview", nil)
 		// A copy isn't deployed where the original is.
 		newSite.Set("public_url", "")
+		clearSiteDeploy(newSite)
 		if err := app.Save(newSite); err != nil {
 			return nil, err
 		}
@@ -777,6 +778,7 @@ func cloneSiteRecords(txApp core.App, pb *pocketbase.PocketBase, sourceSite *cor
 	newSite.Set("preview", nil)
 	// A copy isn't deployed where the original is.
 	newSite.Set("public_url", "")
+	clearSiteDeploy(newSite)
 	if err := txApp.Save(newSite); err != nil {
 		return nil, err
 	}
