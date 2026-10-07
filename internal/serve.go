@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"strings"
 
@@ -21,6 +22,18 @@ func ServeSites(pb *pocketbase.PocketBase) error {
 		}
 
 		serveEvent.Router.GET("/{path...}", func(requestEvent *core.RequestEvent) error {
+			// When this server is only a preview/staging host and the real site is
+			// deployed elsewhere, keep search engines off the Primo-served copy.
+			// This is applied at serve time only: the generated files under
+			// sites/{host}/ are what gets exported and deployed, so baking a
+			// disallow into them would block the live site too.
+			if isNoindexEnabled() {
+				requestEvent.Response.Header().Set("X-Robots-Tag", "noindex, nofollow")
+				if requestEvent.Request.PathValue("path") == "robots.txt" {
+					return requestEvent.String(http.StatusOK, "User-agent: *\nDisallow: /\n")
+				}
+			}
+
 			// In dev mode, redirect bare localhost to dashboard — but not when
 			// the request is a site preview (dashboard iframes hit `/?_site=ID`),
 			// otherwise the iframe bounces to the dashboard instead of rendering
@@ -153,6 +166,13 @@ func ServeSites(pb *pocketbase.PocketBase) error {
 	})
 
 	return nil
+}
+
+// isNoindexEnabled reports whether site responses should ask search engines
+// not to index them (PRIMO_NOINDEX=1 or PRIMO_NOINDEX=true).
+func isNoindexEnabled() bool {
+	value := os.Getenv("PRIMO_NOINDEX")
+	return value == "1" || value == "true"
 }
 
 // serveSitePreview serves the homepage preview file stored on a site record's

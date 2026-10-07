@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -101,6 +102,105 @@ func TestStaticSitePreview(t *testing.T) {
 						t.Fatalf("live page CSP = %q", got)
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestNoindexSiteResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		env     string
+		noindex bool
+	}{
+		{"disabled", "", false},
+		{"enabled with 1", "1", true},
+		{"enabled with true", "true", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("PRIMO_NOINDEX", tc.env)
+			app := newImportTestApp(t)
+			defer app.ResetBootstrapState()
+			site := createImportTestSite(t, app)
+			system, err := app.NewFilesystem()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer system.Close()
+			host := site.GetString("host")
+			publishedRobots := "User-agent: *\nAllow: /\n"
+			for key, content := range map[string]string{
+				"index.html": "published home",
+				"robots.txt": publishedRobots,
+			} {
+				if err := system.Upload([]byte(content), "sites/"+host+"/"+key); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := ServeSites(app); err != nil {
+				t.Fatal(err)
+			}
+			router, err := apis.NewRouter(app)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := app.OnServe().Trigger(&core.ServeEvent{App: app, Router: router}); err != nil {
+				t.Fatal(err)
+			}
+			handler, err := router.BuildMux()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			wantTag := ""
+			if tc.noindex {
+				wantTag = "noindex, nofollow"
+			}
+			for _, pageURL := range []string{
+				"http://" + host + "/",
+				"http://dashboard.localhost/?_site=" + site.Id,
+			} {
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, pageURL, nil))
+				if response.Code != http.StatusOK || response.Body.String() != "published home" {
+					t.Fatalf("%s: status %d, body %q", pageURL, response.Code, response.Body.String())
+				}
+				if got := response.Header().Get("X-Robots-Tag"); got != wantTag {
+					t.Fatalf("%s: X-Robots-Tag = %q, want %q", pageURL, got, wantTag)
+				}
+			}
+
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://"+host+"/robots.txt", nil))
+			wantRobots := publishedRobots
+			if tc.noindex {
+				wantRobots = "User-agent: *\nDisallow: /\n"
+			}
+			if response.Code != http.StatusOK || response.Body.String() != wantRobots {
+				t.Fatalf("robots.txt: status %d, body %q", response.Code, response.Body.String())
+			}
+			if got := response.Header().Get("X-Robots-Tag"); got != wantTag {
+				t.Fatalf("robots.txt: X-Robots-Tag = %q, want %q", got, wantTag)
+			}
+			if tc.noindex {
+				if got := response.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
+					t.Fatalf("robots.txt Content-Type = %q", got)
+				}
+			}
+
+			// The published robots.txt is left untouched so exports and
+			// deployments to the live host keep the site's own rules.
+			reader, err := system.GetReader("sites/" + host + "/robots.txt")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reader.Close()
+			stored, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(stored) != publishedRobots {
+				t.Fatalf("stored robots.txt = %q", stored)
 			}
 		})
 	}
