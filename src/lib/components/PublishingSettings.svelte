@@ -43,7 +43,7 @@
 			const url = new URL(value)
 			if ((url.protocol === 'http:' || url.protocol === 'https:') && !/[?#]/.test(value) && !url.username) return ''
 		} catch {}
-		return 'Enter an absolute http(s) URL without query or fragment, e.g. https://www.example.com'
+		return 'Enter the full address, starting with https:// or http://, without ? or #. For example: https://www.example.com'
 	})
 
 	async function save(event: SubmitEvent) {
@@ -58,7 +58,7 @@
 				Sites.update(site.id, changes)
 				await self.commit()
 			} catch (err) {
-				error = err instanceof Error ? err.message : 'Failed to save publishing settings'
+				error = err instanceof Error ? `Couldn't save the settings: ${err.message}` : "Couldn't save the settings."
 				return
 			} finally {
 				saving = false
@@ -71,19 +71,19 @@
 <Dialog.Root bind:open>
 	<Dialog.Content class="!w-[min(540px,calc(100vw-1rem))] max-w-none max-h-[calc(100vh-2rem)] overflow-y-auto gap-0 pt-11 pb-6 bg-[#1e1e20] border-[#343437] rounded-lg text-[#e4e4e7]">
 		<Dialog.Title class="text-[18px] font-medium leading-none tracking-tight text-[#f4f4f5]">Publishing settings</Dialog.Title>
-		<p class="text-[13px] leading-[1.65] text-[#a9a9b2]">For deploying this site's published files to another host.</p>
+		<p class="text-[13px] leading-[1.65] text-[#a9a9b2]">Only needed when the live site is hosted outside Primo. If Primo serves this site, leave these empty.</p>
 		<form onsubmit={save} class="min-w-0">
 			<div class="mt-4 space-y-2">
-				<Label for="publishing-public-url">Public URL</Label>
+				<Label for="publishing-public-url">Live site URL</Label>
 				<Input id="publishing-public-url" bind:value={public_url} placeholder="https://www.example.com" autocomplete="off" spellcheck={false} />
 				{#if public_url_error}
-					<p class="text-red-500 text-xs">{public_url_error}</p>
+					<p class="text-red-500 text-xs" role="alert">{public_url_error}</p>
 				{:else}
-					<p class="text-muted-foreground text-xs">Where the deployed copy of this site lives. Used in the downloaded files (sitemap, links) instead of the Primo host.</p>
+					<p class="text-muted-foreground text-xs">The address visitors use. Links and the sitemap in the downloaded files point here instead of the Primo address.</p>
 				{/if}
 			</div>
 			{#if error}
-				<p class="text-red-500 text-sm mt-3">{error}</p>
+				<p class="text-red-500 text-sm mt-3" role="alert">{error}</p>
 			{/if}
 			<Dialog.Footer class="mt-6">
 				<button type="button" class="pub-btn" onclick={() => (open = false)}>Cancel</button>
