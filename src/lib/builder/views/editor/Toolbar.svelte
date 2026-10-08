@@ -33,6 +33,7 @@
 	import { read_only } from '$lib/pocketbase/author_mode'
 	import BrowseModePill from './BrowseModePill.svelte'
 	import { track_site_published, track_operation_error, categorize_error } from '$lib/analytics'
+	import { toast } from 'svelte-sonner'
 
 	let { children }: { children: Snippet } = $props()
 
@@ -116,6 +117,28 @@
 			publish_in_progress = false
 		}
 	}
+
+	// Go live sends the last published version to the site's deploy webhook
+	// (internal/deploy.go). Only shown once a developer has configured one.
+	let going_live = $state(false)
+	async function handle_go_live() {
+		going_live = true
+		try {
+			const response = await fetch(`${self.instance?.baseURL}/api/primo/deploy/${site.id}`, {
+				method: 'POST',
+				headers: self.instance?.authStore.token ? { Authorization: `Bearer ${self.instance.authStore.token}` } : {}
+			})
+			const data = await response.json().catch(() => ({}))
+			if (!response.ok) throw new Error(data.message || `Go live failed (${response.status})`)
+			self.update_record(site.id, { deploy_status: data.status, deployed_at: data.deployed_at })
+			toast.success('Deployment triggered')
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : 'Go live failed')
+		} finally {
+			going_live = false
+		}
+	}
+	const go_live_title = $derived('Deploys the last published version of this site.' + (site?.deployed_at ? ` Last triggered ${new Date(site.deployed_at.replace(' ', 'T')).toLocaleString()}.` : ''))
 
 	let going_up = $state(false)
 	let going_down = $state(false)
@@ -411,6 +434,9 @@
 			PRIMO_DEV_MODE=1), so this reads "Preview" and opens the build-preview
 			dialog — the in-editor counterpart of `primo preview`. In CMS mode it
 			reads "Preview" in dev and "Publish" in production. -->
+			{#if site?.deploy_configured}
+				<ToolbarButton icon="lucide:rocket" label="Go live" title={go_live_title} loading={going_live} disabled={publish_in_progress} on:click={handle_go_live} />
+			{/if}
 			<ToolbarButton
 				type="primo"
 				icon={instance.dev_mode ? 'lucide:eye' : 'entypo:publish'}

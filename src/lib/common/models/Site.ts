@@ -20,7 +20,13 @@ export const Site = z.object({
 	domain_error: z.string().optional(),
 	// Where the deployed copy of the site lives when it's hosted outside Primo
 	// (see internal/published.go). Validated and normalized server-side.
-	public_url: z.string().optional()
+	public_url: z.string().optional(),
+	// Go-live webhook state (see internal/deploy.go). The webhook itself is
+	// hidden from the record API; deploy_configured only says whether there is
+	// one, so editors know to show the Go live button.
+	deploy_configured: z.boolean().optional(),
+	deployed_at: z.string().optional(),
+	deploy_status: z.string().optional()
 })
 
 export type Site = z.infer<typeof Site>
