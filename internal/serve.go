@@ -64,6 +64,21 @@ func ServeSites(pb *pocketbase.PocketBase) error {
 
 				// Override host based on the resolved site ID
 				reqHost = site.GetString("host")
+			} else {
+				// Host-based traffic only needs the record for its settings, so a
+				// host without a site (or a failed lookup) is served as before.
+				// One query on the unique host index.
+				site, _ = pb.FindFirstRecordByData("sites", "host", reqHost)
+			}
+
+			// A developer turns this on when the live site is hosted elsewhere
+			// (Publishing settings), so search engines index that copy and not
+			// this one. Sent as a header only, on every response for the site:
+			// robots.txt stays as published, since crawlers must still fetch
+			// the pages to see the header, and nothing is written into the
+			// published files, which are what gets deployed.
+			if site != nil && site.GetBool("noindex") {
+				requestEvent.Response.Header().Set("X-Robots-Tag", "noindex, nofollow")
 			}
 
 			reqPath := requestEvent.Request.PathValue("path")

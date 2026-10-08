@@ -105,3 +105,97 @@ func TestStaticSitePreview(t *testing.T) {
 		})
 	}
 }
+
+func TestNoindexSiteResponses(t *testing.T) {
+	for _, noindex := range []bool{false, true} {
+		name := "indexable"
+		if noindex {
+			name = "noindex"
+		}
+		t.Run(name, func(t *testing.T) {
+			app := newImportTestApp(t)
+			defer app.ResetBootstrapState()
+			site := createImportTestSite(t, app)
+			site.Set("noindex", noindex)
+			if err := app.Save(site); err != nil {
+				t.Fatal(err)
+			}
+			system, err := app.NewFilesystem()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer system.Close()
+			host := site.GetString("host")
+			publishedRobots := "User-agent: *\nAllow: /\n"
+			files := map[string]string{
+				"index.html":       "published home",
+				"about/index.html": "published about",
+				"_symbols/a.js":    "published script",
+				"robots.txt":       publishedRobots,
+			}
+			for key, content := range files {
+				if err := system.Upload([]byte(content), "sites/"+host+"/"+key); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := ServeSites(app); err != nil {
+				t.Fatal(err)
+			}
+			router, err := apis.NewRouter(app)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := app.OnServe().Trigger(&core.ServeEvent{App: app, Router: router}); err != nil {
+				t.Fatal(err)
+			}
+			handler, err := router.BuildMux()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			wantTag := ""
+			if noindex {
+				wantTag = "noindex, nofollow"
+			}
+			previewURL := "http://dashboard.localhost/?_site=" + site.Id
+			for _, tc := range []struct {
+				url, referer, body string
+			}{
+				{"http://" + host + "/", "", "published home"},
+				{"http://" + host + "/about", "", "published about"},
+				{"http://" + host + "/_symbols/a.js", "", "published script"},
+				{previewURL, "", "published home"},
+				{"http://dashboard.localhost/_symbols/a.js", previewURL, "published script"},
+				// robots.txt is served as published: crawlers have to be able
+				// to fetch the pages to see the header.
+				{"http://" + host + "/robots.txt", "", publishedRobots},
+			} {
+				request := httptest.NewRequest(http.MethodGet, tc.url, nil)
+				if tc.referer != "" {
+					request.Header.Set("Referer", tc.referer)
+				}
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, request)
+				if response.Code != http.StatusOK || response.Body.String() != tc.body {
+					t.Fatalf("%s: status %d, body %q", tc.url, response.Code, response.Body.String())
+				}
+				if got := response.Header().Get("X-Robots-Tag"); got != wantTag {
+					t.Fatalf("%s: X-Robots-Tag = %q, want %q", tc.url, got, wantTag)
+				}
+				if got := response.Header().Get("Link"); got != "" {
+					t.Fatalf("%s: unexpected Link header %q", tc.url, got)
+				}
+			}
+
+			// Another site's host isn't affected.
+			if err := system.Upload([]byte("other home"), "sites/other.localhost/index.html"); err != nil {
+				t.Fatal(err)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://other.localhost/", nil))
+			if response.Code != http.StatusOK || response.Header().Get("X-Robots-Tag") != "" {
+				t.Fatalf("other host: status %d, X-Robots-Tag %q", response.Code, response.Header().Get("X-Robots-Tag"))
+			}
+		})
+	}
+}

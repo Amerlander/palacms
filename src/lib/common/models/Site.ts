@@ -17,7 +17,13 @@ export const Site = z.object({
 	domain_status: z.string().optional(),
 	domain_dns_records: z.any().optional(),
 	domain_provider_id: z.string().optional(),
-	domain_error: z.string().optional()
+	domain_error: z.string().optional(),
+	// Where the deployed copy of the site lives when it's hosted outside Primo
+	// (see internal/published.go). Validated and normalized server-side.
+	public_url: z.string().optional(),
+	// Asks search engines not to index the Primo-served copy (X-Robots-Tag,
+	// see internal/serve.go), for sites whose live copy is hosted elsewhere.
+	noindex: z.boolean().optional()
 })
 
 export type Site = z.infer<typeof Site>
