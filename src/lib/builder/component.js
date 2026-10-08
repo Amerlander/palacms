@@ -39,6 +39,22 @@ export const processors = {
 			}
 		})
 	},
+	svelte_runtime: async () => {
+		return await new Promise((resolve) => {
+			checkIfRegistered()
+			async function checkIfRegistered() {
+				const compiler = compilers['svelte_runtime']
+				if (compiler) {
+					resolve(await compiler())
+				} else {
+					checked++
+					if (checked < 100) {
+						setTimeout(checkIfRegistered, 100)
+					}
+				}
+			}
+		})
+	},
 	js: async (raw, options) => {
 		const final = raw
 		return final

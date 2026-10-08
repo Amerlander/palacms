@@ -3,8 +3,14 @@ package internal
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"encoding/xml"
+	"fmt"
 	"io"
+	"path"
+	"regexp"
+	"sort"
+	"strings"
 
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase"
@@ -99,6 +105,68 @@ func generateSymbols(pb *pocketbase.PocketBase, system *filesystem.System, site 
 			return nil, err
 		}
 
+		newFiles = append(newFiles, destinationKey)
+	}
+
+	return newFiles, nil
+}
+
+var (
+	svelteRuntimeVersionPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+-]*$`)
+	svelteRuntimePathPattern    = regexp.MustCompile(`^[0-9A-Za-z_][0-9A-Za-z._/-]*\.js$`)
+)
+
+// generateSvelteRuntime unpacks the site's shared Svelte client runtime (the
+// `svelte_runtime` JSON file the publish worker stores on the site) to
+// sites/{host}/_svelte/{version}/. Hydrated blocks import Svelte from there
+// instead of each bundling a copy, so a page loads one runtime with one
+// reactive scheduler no matter how many interactive blocks it has.
+//
+// Version and paths come from the client, so they are validated to stay inside
+// the version directory. Files are only rewritten when their bytes changed, so
+// their mod times (and Last-Modified revalidation) stay stable across publishes.
+func generateSvelteRuntime(system *filesystem.System, site *core.Record) ([]string, error) {
+	name := site.GetString("svelte_runtime")
+	if name == "" {
+		return nil, nil
+	}
+
+	reader, err := system.GetReader(site.Collection().Id + "/" + site.Id + "/" + name)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	runtime := struct {
+		Version string            `json:"version"`
+		Files   map[string]string `json:"files"`
+	}{}
+	if err := json.NewDecoder(reader).Decode(&runtime); err != nil {
+		return nil, fmt.Errorf("svelte runtime: %w", err)
+	}
+	if !svelteRuntimeVersionPattern.MatchString(runtime.Version) || strings.Contains(runtime.Version, "..") {
+		return nil, fmt.Errorf("svelte runtime: invalid version %q", runtime.Version)
+	}
+
+	filePaths := make([]string, 0, len(runtime.Files))
+	for filePath := range runtime.Files {
+		if !svelteRuntimePathPattern.MatchString(filePath) || path.Clean(filePath) != filePath || strings.Contains(filePath, "..") {
+			return nil, fmt.Errorf("svelte runtime: invalid file path %q", filePath)
+		}
+		filePaths = append(filePaths, filePath)
+	}
+	sort.Strings(filePaths)
+
+	baseKey := "sites/" + site.GetString("host") + "/_svelte/" + runtime.Version + "/"
+	newFiles := make([]string, 0, len(filePaths))
+	for _, filePath := range filePaths {
+		content := []byte(runtime.Files[filePath])
+		destinationKey := baseKey + filePath
+		if existingHash, ok := hashFile(system, destinationKey); !ok || existingHash != sha256.Sum256(content) {
+			if err := system.Upload(content, destinationKey); err != nil {
+				return nil, err
+			}
+		}
 		newFiles = append(newFiles, destinationKey)
 	}
 
@@ -346,11 +414,11 @@ func DeleteSiteHostFiles(pb *pocketbase.PocketBase, host string) error {
 	return nil
 }
 
-// GenerateSite renders a site's published files (symbols, uploads, pages,
-// sitemap) into sites/{host}/... and cleans up any stale files under that host
-// path. It's the core of the /api/primo/generate endpoint, also called after a
-// host change so the site is immediately served at its new domain without a
-// manual re-publish. Note: this writes under the site's CURRENT host, so on a
+// GenerateSite renders a site's published files (symbols, Svelte runtime,
+// uploads, pages, sitemap) into sites/{host}/... and cleans up any stale files
+// under that host path. It's the core of the /api/primo/generate endpoint,
+// also called after a host change so the site is immediately served at its new
+// domain without a manual re-publish. Note: this writes under the site's CURRENT host, so on a
 // host change the caller must persist the new host first; the old host's files
 // are torn down separately via DeleteSiteHostFiles.
 func GenerateSite(pb *pocketbase.PocketBase, site *core.Record) error {
@@ -366,6 +434,11 @@ func GenerateSite(pb *pocketbase.PocketBase, site *core.Record) error {
 	}
 
 	symbolFiles, err := generateSymbols(pb, system, site)
+	if err != nil {
+		return err
+	}
+
+	svelteRuntimeFiles, err := generateSvelteRuntime(system, site)
 	if err != nil {
 		return err
 	}
@@ -409,6 +482,12 @@ cleanup:
 
 		for _, symbolFile := range symbolFiles {
 			if file.Key == symbolFile {
+				continue cleanup
+			}
+		}
+
+		for _, svelteRuntimeFile := range svelteRuntimeFiles {
+			if file.Key == svelteRuntimeFile {
 				continue cleanup
 			}
 		}

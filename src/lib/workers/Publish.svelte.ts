@@ -28,6 +28,14 @@ export const usePublishSite = (site_id?: string) => {
 			// the dashboard reload the iframe while `sites/{host}/…` still holds
 			// the previous build, leaving the thumbnail stale.
 			const preview_uploads: (() => Promise<void>)[] = []
+
+			// Interactive blocks import Svelte from the site's shared runtime
+			// (/_svelte/<version>/), stored on the site record so the generate
+			// step can place it next to the blocks.
+			if (symbols_with_field_keys!.some(({ symbol }) => !!symbol.js)) {
+				promises.push(upload_svelte_runtime())
+			}
+
 			for (const { symbol, field_keys } of symbols_with_field_keys!) {
 				if (!symbol.js) {
 					// No need to compile symbol JavaScript if there's none
@@ -42,9 +50,7 @@ export const usePublishSite = (site_id?: string) => {
 
 				// Use pre-computed field keys to create data object
 				// This ensures the compiled JS knows which props to destructure
-				const generic_data = Object.fromEntries(
-					field_keys.map(key => [key, symbol_data[key] ?? ''])
-				)
+				const generic_data = Object.fromEntries(field_keys.map((key) => [key, symbol_data[key] ?? '']))
 
 				const promise = processors
 					.html({
@@ -56,9 +62,8 @@ export const usePublishSite = (site_id?: string) => {
 						},
 						buildStatic: false,
 						css: 'external',
-
-						// TODO: Svelte runtime needs to be in common bundle shared by all symbol modules.
-						runtime: ['hydrate']
+						runtime: ['hydrate'],
+						external_svelte: true
 					})
 					.then(async (res) => {
 						if (res.error) {
@@ -154,6 +159,26 @@ export const usePublishSite = (site_id?: string) => {
 		}
 	)
 
+	const upload_svelte_runtime = async () => {
+		const runtime = await processors.svelte_runtime()
+		if (!runtime || 'error' in runtime) {
+			throw new Error(`Building the Svelte runtime failed: ${runtime?.error ?? 'No response'}`)
+		}
+		if (!site) {
+			throw new Error('No site')
+		}
+
+		// The runtime only changes with the Svelte version, so skip re-uploading
+		// what this session already stored for the site.
+		const json = JSON.stringify(runtime)
+		if (uploaded_svelte_runtimes.get(site.id) === json) return
+
+		await self.instance?.collection('sites').update(site.id, {
+			svelte_runtime: new File([json], 'svelte-runtime.json', { type: 'application/json' })
+		})
+		uploaded_svelte_runtimes.set(site.id, json)
+	}
+
 	const generate_page = async (page: Page, no_js = false) => {
 		const locale = 'en' as const
 		let error_details = ''
@@ -233,30 +258,31 @@ export const usePublishSite = (site_id?: string) => {
 
 			const header_result = has_header
 				? await processors.html({
-					component: await build_components(header_sections),
-					head, // Include custom head code in first zone processing
-					locale,
-					css: 'external'
-				})
+						component: await build_components(header_sections),
+						head, // Include custom head code in first zone processing
+						locale,
+						css: 'external'
+					})
 				: { body: '', head: '' }
 
 			const body_result = has_body
 				? await processors.html({
-					component: await build_components(body_sections),
-					head: has_header ? head_without_code : head, // Include head.code if no header zone
-					locale,
-					css: 'external'
-				})
+						component: await build_components(body_sections),
+						head: has_header ? head_without_code : head, // Include head.code if no header zone
+						locale,
+						css: 'external'
+					})
 				: { body: '', head: '' }
 
-			const footer_result = footer_sections && footer_sections.length > 0
-				? await processors.html({
-					component: await build_components(footer_sections),
-					head: (has_header || has_body) ? head_without_code : head, // Include head.code if no header/body zones
-					locale,
-					css: 'external'
-				})
-				: { body: '', head: '' }
+			const footer_result =
+				footer_sections && footer_sections.length > 0
+					? await processors.html({
+							component: await build_components(footer_sections),
+							head: has_header || has_body ? head_without_code : head, // Include head.code if no header/body zones
+							locale,
+							css: 'external'
+						})
+					: { body: '', head: '' }
 
 			// Check for errors in any zone
 			if (header_result.error || body_result.error || footer_result.error) {
@@ -365,49 +391,53 @@ export const usePublishSite = (site_id?: string) => {
 	const symbols_with_field_keys = $derived(
 		shouldLoad && data
 			? data.symbols.map((symbol) => ({
-				symbol,
-				field_keys: symbol.fields()?.map((f) => f.key).filter(Boolean) ?? []
-			}))
+					symbol,
+					field_keys:
+						symbol
+							.fields()
+							?.map((f) => f.key)
+							.filter(Boolean) ?? []
+				}))
 			: undefined
 	)
 
 	const sections = $derived(
 		shouldLoad && pages && data
 			? ([
-				...data.page_type_sections.flatMap((section) =>
-					pages
-						.filter((page) => page.page_type === section.page_type)
-						.map((page) => {
-							const content = useContent(section, { target: 'live', page })
-							if (!content) return
+					...data.page_type_sections.flatMap((section) =>
+						pages
+							.filter((page) => page.page_type === section.page_type)
+							.map((page) => {
+								const content = useContent(section, { target: 'live', page })
+								if (!content) return
 
-							return [page, section, content]
-						})
-				),
-				...data.page_sections.map((section) => {
-					const page = Pages.one(section.page)
-					if (!page) return
+								return [page, section, content]
+							})
+					),
+					...data.page_sections.map((section) => {
+						const page = Pages.one(section.page)
+						if (!page) return
 
-					const content = useContent(section, { target: 'live', page })
-					if (!content) return
+						const content = useContent(section, { target: 'live', page })
+						if (!content) return
 
-					return [page, section, content]
-				})
-			] as ([ObjectOf<typeof PageSections> | ObjectOf<typeof PageTypeSections>, ObjectOf<typeof Pages>, NonNullable<ReturnType<typeof useContent>>] | undefined)[])
+						return [page, section, content]
+					})
+				] as ([ObjectOf<typeof PageSections> | ObjectOf<typeof PageTypeSections>, ObjectOf<typeof Pages>, NonNullable<ReturnType<typeof useContent>>] | undefined)[])
 			: undefined
 	)
 	const section_content = $derived(
 		shouldLoad && sections?.every((s) => !!s)
 			? sections
-				.filter((s) => !!s)
-				.reduce(
-					(data, [page, section, content]) => {
-						if (!data[page.id]) data[page.id] = {}
-						data[page.id][section.id] = content
-						return data
-					},
-					{} as Record<string, Record<string, NonNullable<ReturnType<typeof useContent>>>>
-				)
+					.filter((s) => !!s)
+					.reduce(
+						(data, [page, section, content]) => {
+							if (!data[page.id]) data[page.id] = {}
+							data[page.id][section.id] = content
+							return data
+						},
+						{} as Record<string, Record<string, NonNullable<ReturnType<typeof useContent>>>>
+					)
 			: undefined
 	)
 
@@ -426,7 +456,10 @@ export const usePublishSite = (site_id?: string) => {
 	return worker
 }
 
+// Site id → Svelte runtime (as uploaded) stored on it during this session
+const uploaded_svelte_runtimes = new Map<string, string>()
+
 const deduplicate =
 	<T>(key: keyof T) =>
-		(item: T, index: number, array: T[]) =>
-			array.findIndex((value) => value[key] === item[key]) === index
+	(item: T, index: number, array: T[]) =>
+		array.findIndex((value) => value[key] === item[key]) === index

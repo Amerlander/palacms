@@ -13,8 +13,8 @@
 			loader.classList.add('hidden')
 			setTimeout(() => loader.remove(), 250)
 		}
-		import('$lib/compiler/processors').then(({ html, css }) => {
-			registerProcessors({ html, css })
+		import('$lib/compiler/processors').then(({ html, css, svelte_runtime }) => {
+			registerProcessors({ html, css, svelte_runtime })
 			$compilers_registered = true
 		})
 	}

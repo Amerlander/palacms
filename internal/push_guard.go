@@ -101,7 +101,7 @@ func readPushStateAndRecords(app core.App, target string, raw map[string][]map[s
 			}
 			if collection == "sites" {
 				for key := range fields {
-					if key == "preview" || key == "host" || strings.HasPrefix(key, "domain_") {
+					if key == "preview" || key == "svelte_runtime" || key == "host" || strings.HasPrefix(key, "domain_") {
 						delete(fields, key)
 					}
 				}

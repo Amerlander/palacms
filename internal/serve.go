@@ -67,6 +67,18 @@ func ServeSites(pb *pocketbase.PocketBase) error {
 			}
 
 			reqPath := requestEvent.Request.PathValue("path")
+
+			// A preview's modules only know their site through the Referer, and
+			// a module's own imports send the module's URL as Referer — so
+			// /_svelte/... imported from /_symbols/x.js would lose the site.
+			// Redirect referrer-resolved scripts to a URL carrying `_site`; the
+			// browser keys modules by the requested URL, so every block still
+			// shares one instance of each runtime module.
+			if siteId != "" && requestEvent.Request.URL.Query().Get("_site") == "" && path.Ext(reqPath) == ".js" {
+				requestEvent.Response.Header().Set("Cache-Control", "no-store")
+				return requestEvent.Redirect(http.StatusFound, "/"+reqPath+"?_site="+url.QueryEscape(siteId))
+			}
+
 			fileKey := "sites/" + reqHost + "/" + reqPath
 			fileName := path.Base(fileKey)
 
@@ -125,6 +137,23 @@ func ServeSites(pb *pocketbase.PocketBase) error {
 			// (host-based) site traffic keeps its normal caching behavior.
 			if siteId != "" {
 				requestEvent.Response.Header().Set("Cache-Control", "no-store")
+			} else if strings.HasPrefix(reqPath, "_svelte/") {
+				// The shared Svelte runtime lives under a versioned path, but the
+				// version alone doesn't pin the bytes: a rebuild with the same
+				// Svelte version can re-split chunks. Chunk names are content
+				// hashed and safe to cache forever; entry modules (which name
+				// those chunks) revalidate so they never point at deleted chunks.
+				if strings.Contains(reqPath, "/chunks/") {
+					requestEvent.Response.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				} else {
+					requestEvent.Response.Header().Set("Cache-Control", "no-cache")
+				}
+			}
+
+			// Module scripts require a JavaScript MIME type; don't depend on the
+			// host's mime table (e.g. the Windows registry) for it.
+			if strings.HasSuffix(strings.ToLower(fileName), ".js") {
+				requestEvent.Response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 			}
 
 			// In dev mode, inject the dev indicator into HTML files

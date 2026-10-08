@@ -22,8 +22,35 @@ const SVELTE_CDN = `${CDN_URL}/svelte@${SVELTE_VERSION}`
 // In-memory cache for external modules (persists for worker lifetime)
 const module_cache = new Map()
 
+// Published sites load the Svelte client runtime once from /_svelte/<version>/
+// instead of bundling a copy into every block's _symbols/<block>.js — separate
+// copies mean separate reactive schedulers and N downloads of the same code.
+// Keys are the public `svelte/*` subpaths usable in the browser ('' is the
+// root `svelte` entry); server, compiler and types-only entries are skipped.
+const SVELTE_RUNTIME_BASE = `/_svelte/${SVELTE_VERSION}/`
+const SVELTE_RUNTIME_ENTRIES = [
+	'',
+	'animate',
+	'attachments',
+	'easing',
+	'events',
+	'internal/client',
+	'internal/disclose-version',
+	'internal/flags/async',
+	'internal/flags/legacy',
+	'internal/flags/tracing',
+	'legacy',
+	'motion',
+	'reactivity',
+	'reactivity/window',
+	'store',
+	'transition'
+]
+
 registerPromiseWorker(rollup_worker)
-async function rollup_worker({ component, head, hydrated, buildStatic = true, css = 'external', format = 'esm', dev_mode = false, runtime = [] }) {
+async function rollup_worker({ component, head, hydrated, buildStatic = true, css = 'external', format = 'esm', dev_mode = false, runtime = [], external_svelte = false, svelte_runtime = false }) {
+	if (svelte_runtime) return build_svelte_runtime()
+
 	const final = {
 		ssr: '',
 		dom: '',
@@ -184,7 +211,10 @@ async function rollup_worker({ component, head, hydrated, buildStatic = true, cs
 								if (importee.startsWith('/')) return new URL(importee, CDN_URL).href
 							}
 
-							// 6) Svelte runtime pinned
+							// 6) Svelte runtime: shared module on published sites, otherwise pinned & bundled
+							if (external_svelte && (importee === 'svelte' || importee.startsWith('svelte/'))) {
+								return { id: svelte_runtime_url(importee), external: true }
+							}
 							if (importee === 'svelte') return SVELTE_CDN
 							if (importee.startsWith('svelte/')) return `${SVELTE_CDN}/${importee.slice('svelte/'.length)}`
 
@@ -198,27 +228,7 @@ async function rollup_worker({ component, head, hydrated, buildStatic = true, cs
 							if (component_lookup.has(id)) return component_lookup.get(id)
 
 							// Fetch external modules with caching
-							if (/^https?:/.test(id)) {
-								// Check cache first
-								if (module_cache.has(id)) {
-									return module_cache.get(id)
-								}
-
-								try {
-									const response = await fetch(id)
-									if (!response.ok) {
-										throw new Error(`Failed to fetch ${id}: ${response.status} ${response.statusText}`)
-									}
-									const code = await response.text()
-
-									// Cache the result
-									module_cache.set(id, code)
-									return code
-								} catch (error) {
-									console.error(`Error loading external module: ${id}`, error)
-									throw error
-								}
-							}
+							if (/^https?:/.test(id)) return load_remote(id)
 
 							return null
 						},
@@ -257,7 +267,9 @@ async function rollup_worker({ component, head, hydrated, buildStatic = true, cs
 					// replace({
 					//   'process.env.NODE_ENV': JSON.stringify('production'),
 					// }),
-				]
+				],
+				// Keep `/_svelte/...` externals absolute in the output
+				makeAbsoluteExternalsRelative: false
 				// inlineDynamicImports: true
 			})
 		} catch (error) {
@@ -275,6 +287,82 @@ async function rollup_worker({ component, head, hydrated, buildStatic = true, cs
 		if (final.error) return
 		final.error = formatRollupError(error, id)
 	}
+}
+
+async function load_remote(id) {
+	if (module_cache.has(id)) {
+		return module_cache.get(id)
+	}
+
+	try {
+		const response = await fetch(id)
+		if (!response.ok) {
+			throw new Error(`Failed to fetch ${id}: ${response.status} ${response.statusText}`)
+		}
+		const code = await response.text()
+
+		module_cache.set(id, code)
+		return code
+	} catch (error) {
+		console.error(`Error loading external module: ${id}`, error)
+		throw error
+	}
+}
+
+function svelte_runtime_url(importee) {
+	const subpath = importee === 'svelte' ? '' : importee.slice('svelte/'.length)
+	if (!SVELTE_RUNTIME_ENTRIES.includes(subpath)) {
+		throw new Error(`"${importee}" is not available in published sites (not a client-side Svelte module)`)
+	}
+	return SVELTE_RUNTIME_BASE + svelte_runtime_file(subpath)
+}
+
+function svelte_runtime_file(subpath) {
+	return (subpath || 'index') + '.js'
+}
+
+// Builds the shared Svelte client runtime served from /_svelte/<version>/: one
+// multi-entry build with code splitting, so every entry (and every block that
+// imports it) shares a single instance of each internal module. The result
+// only depends on the pinned version, so it is built once per worker lifetime.
+let svelte_runtime_build
+function build_svelte_runtime() {
+	svelte_runtime_build ??= (async () => {
+		const bundle = await rollup({
+			input: Object.fromEntries(SVELTE_RUNTIME_ENTRIES.map((subpath) => [svelte_runtime_file(subpath).slice(0, -'.js'.length), subpath ? `${SVELTE_CDN}/${subpath}` : SVELTE_CDN])),
+			preserveEntrySignatures: 'strict',
+			onwarn(warning, warn) {
+				if (warning.code === 'CIRCULAR_DEPENDENCY') return
+				warn(warning)
+			},
+			plugins: [
+				{
+					name: 'svelte-runtime',
+					resolveId(importee, importer) {
+						if (/^https?:/.test(importee)) return importee
+						if (importer && /^https?:/.test(importer) && (importee.startsWith('.') || importee.startsWith('/'))) {
+							return new URL(importee, importer).href
+						}
+						return `${CDN_URL}/${importee}`
+					},
+					load(id) {
+						return load_remote(id)
+					}
+				}
+			]
+		})
+		const { output } = await bundle.generate({
+			format: 'es',
+			entryFileNames: '[name].js',
+			chunkFileNames: 'chunks/[name]-[hash].js'
+		})
+		const files = Object.fromEntries(output.filter((file) => file.type === 'chunk').map((file) => [file.fileName, file.code]))
+		return { version: SVELTE_VERSION, files }
+	})()
+	return svelte_runtime_build.catch((error) => {
+		svelte_runtime_build = undefined
+		return { error: formatRollupError(error) }
+	})
 }
 
 function formatRollupError(error, id) {

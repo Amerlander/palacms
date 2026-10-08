@@ -20,16 +20,18 @@ const COMPILED_COMPONENTS_CACHE = new Map()
  * @param {string} [options.format='esm'] - The module format to use, such as 'esm' for ES Modules.
  * @param {boolean} [options.dev_mode=false] - Whether Svelte should be compiled in dev mode (i.e. attaches LOC for inspecting) or not
  * @param {string[]} [options.runtime=[]] - Svelte runtime functions to include in bundle (eg. mount, unmount, hydrate).
+ * @param {boolean} [options.external_svelte=false] - Import `svelte` / `svelte/*` from the published site's shared runtime (/_svelte/<version>/) instead of bundling it (see svelte_runtime()).
  * @returns {Promise<Object>} Returns a payload containing the rendered HTML, CSS, JS, and other relevant data.
  * @throws {Error} Throws an error if the compilation or rendering fails.
  */
-export async function html({ component, head, buildStatic = true, css = 'external', format = 'esm', dev_mode = false, runtime = [] }) {
+export async function html({ component, head, buildStatic = true, css = 'external', format = 'esm', dev_mode = false, runtime = [], external_svelte = false }) {
 	let cache_key
 	if (!buildStatic) {
 		cache_key = JSON.stringify({
 			component,
 			format,
-			runtime
+			runtime,
+			external_svelte
 		})
 		if (COMPILED_COMPONENTS_CACHE.has(cache_key)) {
 			return COMPILED_COMPONENTS_CACHE.get(cache_key)
@@ -49,7 +51,8 @@ export async function html({ component, head, buildStatic = true, css = 'externa
 			css,
 			format,
 			dev_mode,
-			runtime
+			runtime,
+			external_svelte
 		})
 	} catch (e) {
 		console.error('Rollup worker error:', e)
@@ -123,6 +126,20 @@ export async function html({ component, head, buildStatic = true, css = 'externa
 	}
 
 	return payload
+}
+
+/**
+ * Builds the shared Svelte client runtime that published blocks compiled with
+ * `external_svelte` import from. Files are keyed by their path relative to
+ * /_svelte/<version>/ (e.g. `index.js`, `internal/client.js`, `chunks/…`).
+ * @returns {Promise<{ version: string, files: Record<string, string> } | { error: string }>}
+ */
+export async function svelte_runtime() {
+	try {
+		return await rollup_worker.postMessage({ svelte_runtime: true })
+	} catch (e) {
+		return { error: e instanceof Error ? e.message : String(e) }
+	}
 }
 
 const cssMap = new Map()
