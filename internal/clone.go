@@ -370,8 +370,10 @@ func importSnapshotRecords(app core.App, snapshot *Snapshot, name, host, groupId
 		newSite.Set("host", host)
 		newSite.Set("group", groupId)
 		newSite.Set("preview", nil)
-		// A copy isn't deployed where the original is.
+		// A copy isn't deployed where the original is, so it isn't hidden
+		// from search engines for that reason either.
 		newSite.Set("public_url", "")
+		newSite.Set("noindex", false)
 		if err := app.Save(newSite); err != nil {
 			return nil, err
 		}
@@ -775,8 +777,10 @@ func cloneSiteRecords(txApp core.App, pb *pocketbase.PocketBase, sourceSite *cor
 	newSite.Set("host", host)
 	newSite.Set("group", groupId)
 	newSite.Set("preview", nil)
-	// A copy isn't deployed where the original is.
+	// A copy isn't deployed where the original is, so it isn't hidden from
+	// search engines for that reason either.
 	newSite.Set("public_url", "")
+	newSite.Set("noindex", false)
 	if err := txApp.Save(newSite); err != nil {
 		return nil, err
 	}

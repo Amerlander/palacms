@@ -286,4 +286,18 @@ func TestPublicURLRequiresDeveloper(t *testing.T) {
 	if got := saved.GetString("public_url"); got != "https://www.example.com" {
 		t.Fatalf("public_url = %q, want normalized https://www.example.com", got)
 	}
+
+	// noindex is gated the same way.
+	if code := patch(editor, `{"noindex":true}`); code != 403 {
+		t.Fatalf("editor noindex change: got HTTP %d, want 403", code)
+	}
+	if code := patch(developer, `{"noindex":true}`); code != 200 {
+		t.Fatalf("developer noindex change: got HTTP %d, want 200", code)
+	}
+	if code := patch(editor, `{"name":"Renamed again","noindex":true}`); code != 200 {
+		t.Fatalf("editor unchanged noindex: got HTTP %d, want 200", code)
+	}
+	if saved, err = app.FindRecordById("sites", site.Id); err != nil || !saved.GetBool("noindex") {
+		t.Fatalf("noindex not saved: %v", err)
+	}
 }

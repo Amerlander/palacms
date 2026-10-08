@@ -1,7 +1,6 @@
 package internal
 
 import (
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -108,20 +107,19 @@ func TestStaticSitePreview(t *testing.T) {
 }
 
 func TestNoindexSiteResponses(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		env     string
-		noindex bool
-	}{
-		{"disabled", "", false},
-		{"enabled with 1", "1", true},
-		{"enabled with true", "true", true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("PRIMO_NOINDEX", tc.env)
+	for _, noindex := range []bool{false, true} {
+		name := "indexable"
+		if noindex {
+			name = "noindex"
+		}
+		t.Run(name, func(t *testing.T) {
 			app := newImportTestApp(t)
 			defer app.ResetBootstrapState()
 			site := createImportTestSite(t, app)
+			site.Set("noindex", noindex)
+			if err := app.Save(site); err != nil {
+				t.Fatal(err)
+			}
 			system, err := app.NewFilesystem()
 			if err != nil {
 				t.Fatal(err)
@@ -129,10 +127,13 @@ func TestNoindexSiteResponses(t *testing.T) {
 			defer system.Close()
 			host := site.GetString("host")
 			publishedRobots := "User-agent: *\nAllow: /\n"
-			for key, content := range map[string]string{
-				"index.html": "published home",
-				"robots.txt": publishedRobots,
-			} {
+			files := map[string]string{
+				"index.html":       "published home",
+				"about/index.html": "published about",
+				"_symbols/a.js":    "published script",
+				"robots.txt":       publishedRobots,
+			}
+			for key, content := range files {
 				if err := system.Upload([]byte(content), "sites/"+host+"/"+key); err != nil {
 					t.Fatal(err)
 				}
@@ -153,54 +154,47 @@ func TestNoindexSiteResponses(t *testing.T) {
 			}
 
 			wantTag := ""
-			if tc.noindex {
+			if noindex {
 				wantTag = "noindex, nofollow"
 			}
-			for _, pageURL := range []string{
-				"http://" + host + "/",
-				"http://dashboard.localhost/?_site=" + site.Id,
+			previewURL := "http://dashboard.localhost/?_site=" + site.Id
+			for _, tc := range []struct {
+				url, referer, body string
+			}{
+				{"http://" + host + "/", "", "published home"},
+				{"http://" + host + "/about", "", "published about"},
+				{"http://" + host + "/_symbols/a.js", "", "published script"},
+				{previewURL, "", "published home"},
+				{"http://dashboard.localhost/_symbols/a.js", previewURL, "published script"},
+				// robots.txt is served as published: crawlers have to be able
+				// to fetch the pages to see the header.
+				{"http://" + host + "/robots.txt", "", publishedRobots},
 			} {
+				request := httptest.NewRequest(http.MethodGet, tc.url, nil)
+				if tc.referer != "" {
+					request.Header.Set("Referer", tc.referer)
+				}
 				response := httptest.NewRecorder()
-				handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, pageURL, nil))
-				if response.Code != http.StatusOK || response.Body.String() != "published home" {
-					t.Fatalf("%s: status %d, body %q", pageURL, response.Code, response.Body.String())
+				handler.ServeHTTP(response, request)
+				if response.Code != http.StatusOK || response.Body.String() != tc.body {
+					t.Fatalf("%s: status %d, body %q", tc.url, response.Code, response.Body.String())
 				}
 				if got := response.Header().Get("X-Robots-Tag"); got != wantTag {
-					t.Fatalf("%s: X-Robots-Tag = %q, want %q", pageURL, got, wantTag)
+					t.Fatalf("%s: X-Robots-Tag = %q, want %q", tc.url, got, wantTag)
+				}
+				if got := response.Header().Get("Link"); got != "" {
+					t.Fatalf("%s: unexpected Link header %q", tc.url, got)
 				}
 			}
 
+			// Another site's host isn't affected.
+			if err := system.Upload([]byte("other home"), "sites/other.localhost/index.html"); err != nil {
+				t.Fatal(err)
+			}
 			response := httptest.NewRecorder()
-			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://"+host+"/robots.txt", nil))
-			wantRobots := publishedRobots
-			if tc.noindex {
-				wantRobots = "User-agent: *\nDisallow: /\n"
-			}
-			if response.Code != http.StatusOK || response.Body.String() != wantRobots {
-				t.Fatalf("robots.txt: status %d, body %q", response.Code, response.Body.String())
-			}
-			if got := response.Header().Get("X-Robots-Tag"); got != wantTag {
-				t.Fatalf("robots.txt: X-Robots-Tag = %q, want %q", got, wantTag)
-			}
-			if tc.noindex {
-				if got := response.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
-					t.Fatalf("robots.txt Content-Type = %q", got)
-				}
-			}
-
-			// The published robots.txt is left untouched so exports and
-			// deployments to the live host keep the site's own rules.
-			reader, err := system.GetReader("sites/" + host + "/robots.txt")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer reader.Close()
-			stored, err := io.ReadAll(reader)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if string(stored) != publishedRobots {
-				t.Fatalf("stored robots.txt = %q", stored)
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://other.localhost/", nil))
+			if response.Code != http.StatusOK || response.Header().Get("X-Robots-Tag") != "" {
+				t.Fatalf("other host: status %d, X-Robots-Tag %q", response.Code, response.Header().Get("X-Robots-Tag"))
 			}
 		})
 	}

@@ -241,8 +241,6 @@ The app uses these environment variables during the initial start to optionally 
   - PRIMO_USER_EMAIL
   - PRIMO_USER_PASSWORD
 
-If the server is only used as a preview/staging host and the real site is deployed elsewhere, set `PRIMO_NOINDEX=1` (or `true`). Site responses then carry `X-Robots-Tag: noindex, nofollow` and `/robots.txt` disallows all crawlers. This happens at serve time only, so generated and exported site files are unchanged.
-
 The container requires volume to be mounted on path `/app/pb_data` for storing files and a SQLite database.
 
 For production deployments, see the [PocketBase deployment documentation](https://pocketbase.io/docs/going-to-production/).

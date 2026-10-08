@@ -4,7 +4,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"strings"
 
@@ -22,18 +21,6 @@ func ServeSites(pb *pocketbase.PocketBase) error {
 		}
 
 		serveEvent.Router.GET("/{path...}", func(requestEvent *core.RequestEvent) error {
-			// When this server is only a preview/staging host and the real site is
-			// deployed elsewhere, keep search engines off the Primo-served copy.
-			// This is applied at serve time only: the generated files under
-			// sites/{host}/ are what gets exported and deployed, so baking a
-			// disallow into them would block the live site too.
-			if isNoindexEnabled() {
-				requestEvent.Response.Header().Set("X-Robots-Tag", "noindex, nofollow")
-				if requestEvent.Request.PathValue("path") == "robots.txt" {
-					return requestEvent.String(http.StatusOK, "User-agent: *\nDisallow: /\n")
-				}
-			}
-
 			// In dev mode, redirect bare localhost to dashboard — but not when
 			// the request is a site preview (dashboard iframes hit `/?_site=ID`),
 			// otherwise the iframe bounces to the dashboard instead of rendering
@@ -77,6 +64,21 @@ func ServeSites(pb *pocketbase.PocketBase) error {
 
 				// Override host based on the resolved site ID
 				reqHost = site.GetString("host")
+			} else {
+				// Host-based traffic only needs the record for its settings, so a
+				// host without a site (or a failed lookup) is served as before.
+				// One query on the unique host index.
+				site, _ = pb.FindFirstRecordByData("sites", "host", reqHost)
+			}
+
+			// A developer turns this on when the live site is hosted elsewhere
+			// (Publishing settings), so search engines index that copy and not
+			// this one. Sent as a header only, on every response for the site:
+			// robots.txt stays as published, since crawlers must still fetch
+			// the pages to see the header, and nothing is written into the
+			// published files, which are what gets deployed.
+			if site != nil && site.GetBool("noindex") {
+				requestEvent.Response.Header().Set("X-Robots-Tag", "noindex, nofollow")
 			}
 
 			reqPath := requestEvent.Request.PathValue("path")
@@ -166,13 +168,6 @@ func ServeSites(pb *pocketbase.PocketBase) error {
 	})
 
 	return nil
-}
-
-// isNoindexEnabled reports whether site responses should ask search engines
-// not to index them (PRIMO_NOINDEX=1 or PRIMO_NOINDEX=true).
-func isNoindexEnabled() bool {
-	value := os.Getenv("PRIMO_NOINDEX")
-	return value == "1" || value == "true"
 }
 
 // serveSitePreview serves the homepage preview file stored on a site record's

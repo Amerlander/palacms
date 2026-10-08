@@ -201,11 +201,11 @@ func canConfigureSiteDeploy(app core.App, auth *core.Record, siteId string) bool
 }
 
 // RegisterPublicURLValidation normalizes sites.public_url on every API write
-// and rejects changes to it by non-developers. The sites update rule only asks
-// whether a user belongs to the site, not in which role, so the role check has
-// to live in a request hook.
+// and rejects changes to it, or to noindex (see serve.go), by non-developers.
+// The sites update rule only asks whether a user belongs to the site, not in
+// which role, so the role check has to live in a request hook.
 func RegisterPublicURLValidation(pb *pocketbase.PocketBase) error {
-	check := func(e *core.RecordRequestEvent, previous string) error {
+	check := func(e *core.RecordRequestEvent, previous string, previousNoindex bool) error {
 		normalized, err := NormalizePublicURL(e.Record.GetString("public_url"))
 		if err != nil {
 			return e.BadRequestError(err.Error(), nil)
@@ -214,13 +214,17 @@ func RegisterPublicURLValidation(pb *pocketbase.PocketBase) error {
 		if normalized != previous && !canConfigureSiteDeploy(e.App, e.Auth, e.Record.Id) {
 			return e.ForbiddenError("Only developers can change the public URL", nil)
 		}
+		if e.Record.GetBool("noindex") != previousNoindex && !canConfigureSiteDeploy(e.App, e.Auth, e.Record.Id) {
+			return e.ForbiddenError("Only developers can change search engine indexing", nil)
+		}
 		return e.Next()
 	}
 	pb.OnRecordCreateRequest("sites").BindFunc(func(e *core.RecordRequestEvent) error {
-		return check(e, "")
+		return check(e, "", false)
 	})
 	pb.OnRecordUpdateRequest("sites").BindFunc(func(e *core.RecordRequestEvent) error {
-		return check(e, e.Record.Original().GetString("public_url"))
+		original := e.Record.Original()
+		return check(e, original.GetString("public_url"), original.GetBool("noindex"))
 	})
 	return nil
 }
