@@ -23,7 +23,13 @@ export const Site = z.object({
 	public_url: z.string().optional(),
 	// Asks search engines not to index the Primo-served copy (X-Robots-Tag,
 	// see internal/serve.go), for sites whose live copy is hosted elsewhere.
-	noindex: z.boolean().optional()
+	noindex: z.boolean().optional(),
+	// Go-live webhook state (see internal/deploy.go). The webhook itself is
+	// hidden from the record API; deploy_configured only says whether there is
+	// one, so editors know to show the Go live button.
+	deploy_configured: z.boolean().optional(),
+	deployed_at: z.string().optional(),
+	deploy_status: z.string().optional()
 })
 
 export type Site = z.infer<typeof Site>

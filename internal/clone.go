@@ -374,6 +374,7 @@ func importSnapshotRecords(app core.App, snapshot *Snapshot, name, host, groupId
 		// from search engines for that reason either.
 		newSite.Set("public_url", "")
 		newSite.Set("noindex", false)
+		clearSiteDeploy(newSite)
 		if err := app.Save(newSite); err != nil {
 			return nil, err
 		}
@@ -781,6 +782,7 @@ func cloneSiteRecords(txApp core.App, pb *pocketbase.PocketBase, sourceSite *cor
 	// search engines for that reason either.
 	newSite.Set("public_url", "")
 	newSite.Set("noindex", false)
+	clearSiteDeploy(newSite)
 	if err := txApp.Save(newSite); err != nil {
 		return nil, err
 	}
