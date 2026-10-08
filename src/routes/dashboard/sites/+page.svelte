@@ -10,7 +10,7 @@
 	import EmptyState from '$lib/components/EmptyState.svelte'
 	import { Separator } from '$lib/components/ui/separator'
 	import { Button } from '$lib/components/ui/button'
-	import { Globe, Loader, ChevronDown, SquarePen, Trash2, EllipsisVertical, ArrowLeftRight, Download, CirclePlus } from 'lucide-svelte'
+	import { Globe, Loader, ChevronDown, SquarePen, Trash2, EllipsisVertical, ArrowLeftRight, Download, CirclePlus, Rocket } from 'lucide-svelte'
 	import { useSidebar } from '$lib/components/ui/sidebar'
 	import { page } from '$app/state'
 	import type { Site } from '$lib/common/models/Site'
@@ -24,6 +24,8 @@
 	import { is_host_assigned, is_host_reachable, site_editor_url } from '$lib/site_host'
 	import CreateSite from '$lib/components/CreateSite.svelte'
 	import ConnectDomain from '$lib/components/ConnectDomain.svelte'
+	import PublishingSettings from '$lib/components/PublishingSettings.svelte'
+	import { current_user } from '$lib/pocketbase/user'
 	import { toast } from 'svelte-sonner'
 
 	const sidebar = useSidebar()
@@ -191,6 +193,12 @@
 	// dashboard just opens it for the selected site.
 	let is_assign_domain_open = $state(false)
 
+	// Hosting settings are developer configuration. Only users with a server
+	// role reach the dashboard, so that role decides; superusers count as
+	// developers, as they do server-side (canConfigureSiteDeploy).
+	const is_developer = $derived($current_user?.serverRole === 'developer' || !!self.instance?.authStore.isSuperuser)
+	let is_publishing_settings_open = $state(false)
+
 	let is_delete_site_open = $state(false)
 	let deleting_site = $state(false)
 	async function delete_site() {
@@ -338,6 +346,17 @@
 						<Globe class="h-4 w-4" />
 						<span>{is_host_assigned(site) ? 'Change domain' : 'Assign domain'}</span>
 					</DropdownMenu.Item>
+					{#if is_developer}
+						<DropdownMenu.Item
+							onclick={() => {
+								current_site = site
+								is_publishing_settings_open = true
+							}}
+						>
+							<Rocket class="h-4 w-4" />
+							<span>Publishing settings</span>
+						</DropdownMenu.Item>
+					{/if}
 					{#if site_groups.length > 1}
 						<DropdownMenu.Item
 							onclick={() => {
@@ -467,6 +486,8 @@
 	bind:open={is_assign_domain_open}
 	onconnected={(result) => current_site && self.update_record(current_site.id, { host: result.host, domain_status: result.status })}
 />
+
+<PublishingSettings site={current_site} bind:open={is_publishing_settings_open} />
 
 <AlertDialog.Root bind:open={is_delete_site_open}>
 	<AlertDialog.Content>

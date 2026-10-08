@@ -172,13 +172,14 @@ func rewritePublishedHost(host, publicURL string) func([]byte) []byte {
 	}
 }
 
-// canEditPublicURL reports whether auth may change a site's public_url. It
-// decides where the deployed copy of the site claims to live (sitemap, links),
-// which is deploy configuration like head/foot code, so it's limited to
-// developers. Mirrors the editor's notion of a developer (src/lib/pocketbase/
+// canConfigureSiteDeploy reports whether auth may change how a site is
+// deployed outside Primo (the dashboard's Publishing settings), such as its
+// public_url, which decides where the deployed copy claims to live (sitemap,
+// links). Like head/foot code that's developer configuration, so it's limited
+// to developers. Mirrors the editor's notion of a developer (src/lib/pocketbase/
 // user.ts): the server role wins, and only users without one fall back to
 // their site role assignment.
-func canEditPublicURL(app core.App, auth *core.Record, siteId string) bool {
+func canConfigureSiteDeploy(app core.App, auth *core.Record, siteId string) bool {
 	if auth == nil {
 		return false
 	}
@@ -210,7 +211,7 @@ func RegisterPublicURLValidation(pb *pocketbase.PocketBase) error {
 			return e.BadRequestError(err.Error(), nil)
 		}
 		e.Record.Set("public_url", normalized)
-		if normalized != previous && !canEditPublicURL(e.App, e.Auth, e.Record.Id) {
+		if normalized != previous && !canConfigureSiteDeploy(e.App, e.Auth, e.Record.Id) {
 			return e.ForbiddenError("Only developers can change the public URL", nil)
 		}
 		return e.Next()
