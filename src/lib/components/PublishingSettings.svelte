@@ -14,12 +14,16 @@
 		site,
 		open = $bindable(false)
 	}: {
-		site: Pick<Site, 'id' | 'public_url'> | null | undefined
+		site: Pick<Site, 'id' | 'public_url' | 'noindex'> | null | undefined
 		open?: boolean
 	} = $props()
 
 	let public_url = $state('')
 	let initial_public_url = ''
+	let noindex = $state(false)
+	let initial_noindex = false
+	// Set once the checkbox is clicked, so the public URL stops driving it.
+	let noindex_touched = false
 	let error = $state('')
 	let saving = $state(false)
 
@@ -30,6 +34,9 @@
 		untrack(() => {
 			initial_public_url = site?.public_url || ''
 			public_url = initial_public_url
+			initial_noindex = !!site?.noindex
+			noindex = initial_noindex
+			noindex_touched = false
 			error = ''
 		})
 	})
@@ -46,11 +53,19 @@
 		return 'Enter an absolute http(s) URL without query or fragment, e.g. https://www.example.com'
 	})
 
+	// A site with a public URL is live elsewhere, so the Primo copy usually
+	// shouldn't compete with it in search results. Suggested, not forced: the
+	// box stays editable and isn't touched again once clicked.
+	function suggest_noindex(value: string) {
+		if (!noindex_touched) noindex = initial_noindex || !!value.trim()
+	}
+
 	async function save(event: SubmitEvent) {
 		event.preventDefault()
 		if (!site || saving || public_url_error) return
 		const changes: Partial<Site> = {}
 		if (public_url.trim() !== initial_public_url) changes.public_url = public_url.trim()
+		if (noindex !== initial_noindex) changes.noindex = noindex
 		if (Object.keys(changes).length) {
 			saving = true
 			error = ''
@@ -75,12 +90,26 @@
 		<form onsubmit={save} class="min-w-0">
 			<div class="mt-4 space-y-2">
 				<Label for="publishing-public-url">Public URL</Label>
-				<Input id="publishing-public-url" bind:value={public_url} placeholder="https://www.example.com" autocomplete="off" spellcheck={false} />
+				<Input
+					id="publishing-public-url"
+					bind:value={public_url}
+					oninput={(event) => suggest_noindex(event.currentTarget.value)}
+					placeholder="https://www.example.com"
+					autocomplete="off"
+					spellcheck={false}
+				/>
 				{#if public_url_error}
 					<p class="text-red-500 text-xs">{public_url_error}</p>
 				{:else}
 					<p class="text-muted-foreground text-xs">Where the deployed copy of this site lives. Used in the downloaded files (sitemap, links) instead of the Primo host.</p>
 				{/if}
+			</div>
+			<div class="mt-4 space-y-1">
+				<label class="flex items-center gap-2 text-sm font-medium leading-none">
+					<input type="checkbox" bind:checked={noindex} onchange={() => (noindex_touched = true)} class="h-4 w-4 accent-[#ededf0]" />
+					Hide the Primo copy from search engines
+				</label>
+				<p class="text-muted-foreground text-xs pl-6">Use when the live site is hosted elsewhere.</p>
 			</div>
 			{#if error}
 				<p class="text-red-500 text-sm mt-3">{error}</p>
